@@ -1,0 +1,23 @@
+#!/bin/sh
+# Return the list of public IP addresses of all my instances (run ec2-refresh
+# before)
+case $# in
+1)
+    jq -r '
+    .Reservations[].Instances[] |
+    select(.State.Name == "running") |
+    select((.Tags[] | select(.Key == "NodeType") | .Value) == "'$1'") |
+    .PublicIpAddress
+    ' /tmp/ec2-instances-nyh
+    exit 0
+esac
+
+jq -r '
+    .Reservations[].Instances[] |
+    select(.State.Name == "running") |
+
+    .PublicIpAddress+" "+
+    (.Tags[] | select(.Key == "NodeType") | .Value)+" "+
+    .InstanceType+" "+
+    .PrivateIpAddress
+' /tmp/ec2-instances-nyh

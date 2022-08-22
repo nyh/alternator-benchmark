@@ -1,0 +1,20 @@
+# Alternator write throughput benchmark on i4i instances
+
+# master build 951 from 2022-06-06T16:30:04
+# Until we have an official version with improved performance and i4i support
+#export SCT_SCYLLA_VERSION=5.0.rc6
+#export SCT_AMI_ID_DB_SCYLLA=ami-0299f5da58fb22203
+export SCT_SCYLLA_VERSION=5.0.0
+
+export SCT_IP_SSH_CONNECTIONS=public
+export SCT_INTRA_NODE_COMM_PUBLIC=true
+export SCT_CLUSTER_HEALTH_CHECK=false
+export SCT_REGION_NAME=us-east-1
+#export SCT_INSTANCE_PROVISION=spot
+#export SCT_INSTANCE_PROVISION_FALLBACK_ON_DEMAND=true
+export SCT_INSTANCE_PROVISION=on_demand
+
+export SCT_RUN_DB_NODE_BENCHMARKS=false
+export JOB_NAME=local_run
+
+hydra run-test nyh_alternator_test.NyhAlternatorTest.test_write --backend aws --config nyh/run2a3.yaml 

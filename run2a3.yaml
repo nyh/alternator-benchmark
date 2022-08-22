@@ -1,0 +1,37 @@
+test_duration: 300
+
+round_robin: true
+stress_cmd_w: >-2
+  bin/ycsb -jvm-args='-Dorg.slf4j.simpleLogger.defaultLogLevel=OFF' run  dynamodb -P workloads/workloada -threads 100 -p recordcount=300000
+  -p requestdistribution=uniform -p fieldcount=10 -p fieldlength=256
+  -p readproportion=0 -p updateproportion=0 -p scanproportion=0 -p insertproportion=1
+  -p maxexecutiontime=1200 -p operationcount=2200000
+
+stress_multiplier: 8
+
+n_db_nodes: 3
+n_loaders: 4
+n_monitor_nodes: 1
+
+# i3.2xlarge is 8vcpu, 61 GB memory, 1 1.9TB SSD, 10 Gbps network
+# i4i.2xlarge is 8vcpu, 64 GB memory, 1.9TB SSD, 10 Gbps network
+# costs (hourly, on demand) on us-east-2 (ohio): i3.2xlarge: $0.624, i4i.2xlarge: $0.686
+# i4i doesn't work yet (see https://github.com/scylladb/scylla-machine-image/issues/356 https://github.com/scylladb/scylla-machine-image/issues/342)
+instance_type_db: 'i4i.2xlarge'
+#instance_type_db: 'i3.2xlarge'
+instance_type_loader: 'c5.2xlarge'
+instance_type_monitor: 't3.small'
+
+alternator_port: 8080
+dynamodb_primarykey_type: HASH_AND_RANGE
+
+user_prefix: 'perf-alternator'
+space_node_threshold: 644245094
+
+store_perf_results: false
+send_email: true
+email_recipients: ['nyh@scylladb.com']
+
+post_behavior_db_nodes: "keep"
+post_behavior_loader_nodes: "keep"
+post_behavior_monitor_nodes: "keep"

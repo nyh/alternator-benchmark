@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refresh current instance list to /tmp/ec2-instances-$LOGNAME
+FILE=/tmp/ec2-instances-$LOGNAME
+aws ec2 describe-instances --filters "Name=tag:RunByUser,Values=$LOGNAME" >$FILE
