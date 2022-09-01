@@ -6,7 +6,7 @@ set -ex
 
 # Write Isolation Mode to use in the test - "forbid_rmw" (no LWT) or
 # "always_use_lwt":
-isolation=forbid_rmw
+isolation=${isolation-forbid_rmw}
 
 ec2-refresh
 
@@ -53,7 +53,9 @@ END
 # Number of YCSB loaders to use per loader/server combination.
 # In other words, each loader will run MULT*nservers ycsb processes, and each
 # server will be loaded by MULT*nloaders ycsb processes.
-MULT=1
+# TODO: I don't understand why with say fieldcount=1 MULT=2 it takes a very
+# long time to get higher results than MULT=1.
+MULT=${MULT-1}
 
 for loader in ${loaders[@]}
 do
@@ -65,8 +67,8 @@ do
             ec2-ssh $loader "cd ycsb-0.15.0; bin/ycsb -jvm-args='-Dorg.slf4j.simpleLogger.defaultLogLevel=OFF' run  dynamodb -P workloads/workloada -threads 100 \
             -p recordcount=300000 \
             -p requestdistribution=uniform \
-            -p fieldcount=10 \
-            -p fieldlength=256 \
+            -p fieldcount=${fieldcount-10} \
+            -p fieldlength=${fieldlength-256} \
             -p readproportion=0 \
             -p updateproportion=0 \
             -p scanproportion=0 \
