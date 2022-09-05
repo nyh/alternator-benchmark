@@ -78,8 +78,8 @@ do
             -p updateproportion=0 \
             -p scanproportion=0 \
             -p insertproportion=1 \
-            -p maxexecutiontime=1200 \
-            -p operationcount=2200000 \
+            -p maxexecutiontime=${time-300} \
+            -p operationcount=999999999 \
             -p measurementtype=hdrhistogram \
             -p dynamodb.endpoint=http://$node:8080 \
             -p dynamodb.connectMax=200 \
@@ -100,10 +100,10 @@ wait
 
 # Add the average (over the entire run) of the throughput of each loader.
 # For the result to make sense, the loaders should all start and stop at
-# roughly the same time. A more accurate approach would be to calculate
-# the total throughput at each second and then graph (and average) those,
-# but that's more complicated.
+# roughly the same time, and the run must be long enough:
+# * "time" of 300 (5 minutes) seems to give around 95% of the throughput
+# * "time" of 600 (10 minutes) seems to give around 98% of the throughput
+# A more accurate approach would be to calculate # the total throughput at
+# each second and then graph (and average) those, but that's more complicated.
 fgrep -h '[OVERALL], Throughput(ops/sec)' $TMPDIR/* |
     awk '{sum+=$3} END {print sum}'
-
-
