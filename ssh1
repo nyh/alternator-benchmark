@@ -48,7 +48,6 @@ END
         
 # CONTINUE HERE: save the loader output!
 # CONTINUE HERE: calculate result from this output.
-# CONTINUE HERE: by the performance I think we're using LWT. Can we not use it?
 
 # Number of YCSB loaders to use per loader/server combination.
 # In other words, each loader will run MULT*nservers ycsb processes, and each
@@ -56,6 +55,12 @@ END
 # TODO: I don't understand why with say fieldcount=1 MULT=2 it takes a very
 # long time to get higher results than MULT=1.
 MULT=${MULT-1}
+
+TMPDIR=/tmp/ssh1-$$
+#trap 'rm -r /tmp/ssh1-$$' 0 1 2 3 15
+mkdir $TMPDIR
+echo keeping stats in $TMPDIR
+trap 'rm -r /tmp/ssh1-$$' 1 2 3 15
 
 for loader in ${loaders[@]}
 do
@@ -84,7 +89,7 @@ do
             -p dynamodb.hashKeyName=c \
             -p dynamodb.primaryKeyType=HASH_AND_RANGE \
             -p dynamodb.awsCredentialsFile=/tmp/alternator-credentials \
-            -s" &
+            -s" > $TMPDIR/$loader-$node-$mult 2>&1 &
         done
     done
 done
@@ -92,3 +97,13 @@ done
 # Wait for all the loaders started above to finish.
 # TODO: catch interrupt and kill all the loaders.
 wait
+
+# Add the average (over the entire run) of the throughput of each loader.
+# For the result to make sense, the loaders should all start and stop at
+# roughly the same time. A more accurate approach would be to calculate
+# the total throughput at each second and then graph (and average) those,
+# but that's more complicated.
+fgrep -h '[OVERALL], Throughput(ops/sec)' $TMPDIR/* |
+    awk '{sum+=$3} END {print sum}'
+
+
