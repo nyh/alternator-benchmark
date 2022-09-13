@@ -23,11 +23,11 @@ loaders=(`ec2-ips loader`)
 
 case $aws in
 "") # Scylla
+    # Modified YCSB using ~/.aws/credentials and not a separate file
     cat <<END >/tmp/alternator-credentials
-    accessKey = alternator
-    secretKey = alternator_secret_access_key
+    aws_access_key_id = alternator
+    aws_secret_access_key = alternator_secret_access_key
 END
-    #cp /tmp/alternator-credentials /tmp/alternator-credentials2
     ;;
 *) # AWS
     ./ec2-temporary-key >/tmp/alternator-credentials
@@ -37,9 +37,8 @@ esac
 for loader in ${loaders[@]}
 do
     (
-        ec2-scp /tmp/alternator-credentials $loader:/tmp
-        #ec2-ssh $loader mkdir -p .aws
-        #ec2-scp /tmp/alternator-credentials2 $loader:.aws/credentials
+        ec2-ssh $loader mkdir -p .aws
+        ec2-scp /tmp/alternator-credentials $loader:.aws/credentials
     )&
 done
 wait
@@ -156,7 +155,6 @@ do
             -p dynamodb.consistentReads=true \
             -p dynamodb.primaryKey=p \
             -p dynamodb.primaryKeyType=HASH \
-            -p dynamodb.awsCredentialsFile=/tmp/alternator-credentials \
             -s" > $TMPDIR/$loader-$node-$mult 2>&1 &
         done
     done
