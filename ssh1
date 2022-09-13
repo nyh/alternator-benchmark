@@ -1,5 +1,8 @@
 #!/bin/bash
-#
+
+# take various ec2-* scripts from the current directory
+PATH=.:$PATH
+
 # Run write throughput benchmark
 # Run on an existing Scylla cluster + loaders previously created by nyh/run2a3
 set -ex
@@ -8,11 +11,70 @@ set -ex
 # "always_use_lwt":
 isolation=${isolation-forbid_rmw}
 
+# If "aws" environment variable is set, we test the real DynamoDB in that
+# Amazon region (e.g., "aws=us-east-1").
+# FIXME: "wcu" must also be specified in that case (for the write test).
+# If "aws" is empty, Scylla (on nodes returned by ec2-ips) is contacted.
+
 ec2-refresh
 
-# Pick one of the Scylla nodes as the one to send administrative
-# requests to:
-scylla_api=http://`ec2-ips scylla-db | head -1`:8080
+# Set up loader machines
+loaders=(`ec2-ips loader`)
+
+case $aws in
+"") # Scylla
+    cat <<END >/tmp/alternator-credentials
+    accessKey = alternator
+    secretKey = alternator_secret_access_key
+END
+    #cp /tmp/alternator-credentials /tmp/alternator-credentials2
+    ;;
+*) # AWS
+    ./ec2-temporary-key >/tmp/alternator-credentials
+    ;;
+esac
+
+for loader in ${loaders[@]}
+do
+    (
+        ec2-scp /tmp/alternator-credentials $loader:/tmp
+        #ec2-ssh $loader mkdir -p .aws
+        #ec2-scp /tmp/alternator-credentials2 $loader:.aws/credentials
+    )&
+done
+wait
+
+#SCT's YCSB:
+#YCSB="cd ycsb-0.15.0; bin/ycsb -jvm-args='-Dorg.slf4j.simpleLogger.defaultLogLevel=OFF'"
+
+# Copy my version of YCSB:
+# To build ~/YCSB/OUT, do:
+#   cd $HOME
+#   git clone git@github.com:brianfrankcooper/YCSB.git
+#   cd YCSB
+#   mvn -pl site.ycsb:dynamodb-binding -am clean package -DskipTests
+#   mkdir OUT
+#   tar zxvf dynamodb/target/ycsb-dynamodb-binding* -C OUT --strip-components 1
+MY_YCSB_DIR=/home/nyh/YCSB/OUT
+YCSB="cd ycsb; bin/ycsb"
+for loader in ${loaders[@]}
+do
+    (
+        ec2-rsync -aP $MY_YCSB_DIR/ $loader:ycsb/
+    )&
+done
+wait
+
+case $aws in
+"") # Scylla
+    # Pick one of the Scylla nodes as the one to send administrative
+    # requests to:
+    scylla_api=http://`ec2-ips scylla-db | head -1`:8080
+    ;;
+*)  # AWS
+    scylla_api=http://dynamodb.$aws.amazonaws.com
+    ;;
+esac
 
 # Create the test table "usertable" (deleting it first if it exists)
 # FIXME: need to delete the table without snapshots, which just wastes
@@ -21,6 +83,9 @@ scylla_api=http://`ec2-ips scylla-db | head -1`:8080
 aws dynamodb delete-table \
     --endpoint-url $scylla_api \
     --table-name usertable || :
+aws dynamodb wait table-not-exists \
+    --endpoint-url $scylla_api \
+    --table-name usertable
 aws dynamodb create-table \
     --endpoint-url $scylla_api \
     --table-name usertable \
@@ -30,22 +95,11 @@ aws dynamodb create-table \
         AttributeName=p,KeyType=HASH \
     --billing-mode PAY_PER_REQUEST \
     --tags Key=system:write_isolation,Value=$isolation
+aws dynamodb wait table-exists \
+    --endpoint-url $scylla_api \
+    --table-name usertable
 
-loaders=(`ec2-ips loader`)
 nodes=(`ec2-ips scylla-db`)
-
-#cat <<END >/tmp/alternator-credentials
-#accessKey = alternator
-#secretKey = alternator_secret_access_key
-#END
-
-cat <<END >/tmp/alternator-credentials
-accessKey = alternator
-secretKey = alternator_secret_access_key
-END
-        
-# CONTINUE HERE: save the loader output!
-# CONTINUE HERE: calculate result from this output.
 
 # Number of YCSB loaders to use per loader/server combination.
 # In other words, each loader will run MULT*nservers ycsb processes, and each
@@ -56,17 +110,26 @@ MULT=${MULT-1}
 
 TMPDIR=/tmp/ssh1-$$
 #trap 'rm -r /tmp/ssh1-$$' 0 1 2 3 15
+#trap 'rm -r /tmp/ssh1-$$' 1 2 3 15
 mkdir $TMPDIR
 echo keeping stats in $TMPDIR
-trap 'rm -r /tmp/ssh1-$$' 1 2 3 15
 
+typeset -i i=0
 for loader in ${loaders[@]}
 do
-    ec2-scp /tmp/alternator-credentials $loader:/tmp
     for node in ${nodes[@]}
     do
+        case $aws in
+        "") # Scylla:
+            endpoint=http://$node:8080
+            ;;
+        *)  # AWS:
+            endpoint=http://dynamodb.$aws.amazonaws.com
+            ;;
+        esac
         for mult in `seq $MULT`
         do
+            let ++i
             # For description of the following options, see
             # https://github.com/brianfrankcooper/YCSB/blob/master/dynamodb/conf/dynamodb.properties
             # NOTE: YCSB currently has two modes - "HASH" - with single-row
@@ -74,8 +137,9 @@ do
             # partition and all the items in it. The HASH_AND_RANGE mode is
             # worthless for benchmarking because it has a single hot
             # partition.
-            ec2-ssh $loader "cd ycsb-0.15.0; bin/ycsb -jvm-args='-Dorg.slf4j.simpleLogger.defaultLogLevel=OFF' run  dynamodb -P workloads/workloada -threads 100 \
+            ec2-ssh $loader "$YCSB run dynamodb -P workloads/workloada -threads 100 \
             -p recordcount=1000000 \
+            -p insertstart=$((i*1000000 )) \
             -p requestdistribution=uniform \
             -p fieldcount=${fieldcount-10} \
             -p fieldlength=${fieldlength-256} \
@@ -86,7 +150,7 @@ do
             -p maxexecutiontime=${time-300} \
             -p operationcount=999999999 \
             -p measurementtype=hdrhistogram \
-            -p dynamodb.endpoint=http://$node:8080 \
+            -p dynamodb.endpoint=$endpoint \
             -p dynamodb.connectMax=200 \
             -p requestdistribution=uniform \
             -p dynamodb.consistentReads=true \
@@ -111,3 +175,18 @@ wait
 # each second and then graph (and average) those, but that's more complicated.
 fgrep -h '[OVERALL], Throughput(ops/sec)' $TMPDIR/* |
     awk '{sum+=$3} END {print sum}'
+
+
+case $aws in
+"") # Scylla
+    # Leave the table behind. It has a fixed name and will be deleted in
+    # the next run.
+    ;;
+*)  # AWS
+    # On AWS, delete the table so we don't continue to pay a fortune for it
+    # if it is a provisioned table!
+    aws dynamodb delete-table \
+        --endpoint-url $scylla_api \
+        --table-name usertable || :
+    ;;
+esac
