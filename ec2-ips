@@ -1,6 +1,17 @@
-#!/bin/sh
-# Return the list of public IP addresses of all my instances (run ec2-refresh
-# before)
+#!/bin/bash
+# Return the list of public IP addresses of all my instances.
+# If ec2-refresh was run recently enough (currently, 5 minutes), it returns
+# the responses cached by it, otherwise it runs ec2-refresh again.
+
+logname=`logname`
+cache=/tmp/ec2-instances-$logname
+cache_age_seconds=$(($(date +%s) - $(stat --format %Y $cache)))
+if ((cache_age_seconds > 300))
+then
+    echo Instance cache $cache is $cache_age_seconds seconds old, refreshing.
+    ec2-refresh
+fi
+
 case $# in
 1)
     jq -r '
@@ -8,7 +19,7 @@ case $# in
     select(.State.Name == "running") |
     select((.Tags[] | select(.Key == "NodeType") | .Value) == "'$1'") |
     .PublicIpAddress
-    ' /tmp/ec2-instances-nyh
+    ' $cache
     exit 0
 esac
 
@@ -20,4 +31,4 @@ jq -r '
     (.Tags[] | select(.Key == "NodeType") | .Value)+" "+
     .InstanceType+" "+
     .PrivateIpAddress
-' /tmp/ec2-instances-nyh
+' $cache
