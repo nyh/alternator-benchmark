@@ -2,5 +2,5 @@
 # The "rsync-path" is needed because the target only allows us to ssh as
 # user "centos", not root, but needs root permissions to actually write the
 # files...
-rsync -e "ssh -i ~/.ssh/scylla-qa-ec2 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -l centos" --rsync-path="sudo rsync" "$@"
+rsync -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o IdentityFile=~/.ssh/scylla-qa-ec2 -o IdentitiesOnly=yes -l centos" --rsync-path="sudo rsync" "$@"
 
