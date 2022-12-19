@@ -3,4 +3,4 @@ ARGS=
 case $1 in
 -t) ARGS=$1; shift;;
 esac
-ssh $ARGS -i ~/.ssh/scylla-qa-ec2 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR centos@"$@"
+ssh $ARGS -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o IdentityFile=~/.ssh/scylla-qa-ec2 -o IdentitiesOnly=yes centos@"$@"
