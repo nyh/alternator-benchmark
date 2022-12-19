@@ -1,0 +1,8 @@
+#!/bin/bash
+
+for loader in `ec2-ips loader`
+do
+    ec2-ssh $loader pkill -f ycsb-0.15.0 &
+done
+# After spawning all the ssh's in parallel, we wait for all of them to finish.
+wait

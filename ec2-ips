@@ -8,7 +8,7 @@ cache=/tmp/ec2-instances-$logname
 cache_age_seconds=$(($(date +%s) - $(stat --format %Y $cache)))
 if ((cache_age_seconds > 300))
 then
-    echo Instance cache $cache is $cache_age_seconds seconds old, refreshing.
+    echo Instance cache $cache is $cache_age_seconds seconds old, refreshing. >&2
     ec2-refresh
 fi
 
