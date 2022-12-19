@@ -1,10 +1,9 @@
 # Alternator write throughput benchmark on i4i instances
 
-# master build 951 from 2022-06-06T16:30:04
-# Until we have an official version with improved performance and i4i support
 #export SCT_SCYLLA_VERSION=5.0.rc6
 #export SCT_AMI_ID_DB_SCYLLA=ami-0299f5da58fb22203
-export SCT_SCYLLA_VERSION=5.0.0
+#export SCT_SCYLLA_VERSION=5.0.0
+export SCT_SCYLLA_VERSION=5.1.1
 
 export SCT_IP_SSH_CONNECTIONS=public
 export SCT_INTRA_NODE_COMM_PUBLIC=true
