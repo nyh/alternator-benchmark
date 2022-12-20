@@ -218,17 +218,6 @@ done
 # TODO: catch interrupt and kill all the loaders.
 wait
 
-# Add the average (over the entire run) of the throughput of each loader.
-# For the result to make sense, the loaders should all start and stop at
-# roughly the same time, and the run must be long enough:
-# * "time" of 300 (5 minutes) seems to give around 95% of the throughput
-# * "time" of 600 (10 minutes) seems to give around 98% of the throughput
-# A more accurate approach would be to calculate # the total throughput at
-# each second and then graph (and average) those, but that's more complicated.
-fgrep -h '[OVERALL], Throughput(ops/sec)' $TMPDIR/* |
-    awk '{sum+=$3} END {print sum}'
-
-
 case $aws in
 "") # Scylla
     # Leave the table behind. It has a fixed name and will be deleted in
@@ -242,3 +231,13 @@ case $aws in
         --table-name $usertable || :
     ;;
 esac
+
+# Add the average (over the entire run) of the throughput of each loader.
+# For the result to make sense, the loaders should all start and stop at
+# roughly the same time, and the run must be long enough:
+# * "time" of 300 (5 minutes) seems to give around 95% of the throughput
+# * "time" of 600 (10 minutes) seems to give around 98% of the throughput
+# A more accurate approach would be to calculate # the total throughput at
+# each second and then graph (and average) those, but that's more complicated.
+fgrep -h '[OVERALL], Throughput(ops/sec)' $TMPDIR/* |
+    awk '{sum+=$3} END {print "total throughput: " sum}'
