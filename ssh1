@@ -74,7 +74,7 @@ wait
 #   mvn -pl site.ycsb:dynamodb-binding -am clean package -DskipTests
 #   mkdir OUT
 #   tar zxvf dynamodb/target/ycsb-dynamodb-binding* -C OUT --strip-components 1
-MY_YCSB_DIR=/home/nyh/YCSB/OUT
+MY_YCSB_DIR=${MY_YCSB_DIR-/home/nyh/YCSB/OUT}
 YCSB="cd ycsb; bin/ycsb"
 for loader in ${loaders[@]}
 do
