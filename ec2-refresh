@@ -1,5 +1,13 @@
 #!/bin/sh
 # Look for all ec2 instances run by user $LOGNAME and cache them in $FILE:
+region=${region-$aws}
+
+if [ -n "$region" ]; then
+    region="--region $region"
+else
+    region=""
+fi
+
 logname=`logname`
 FILE=/tmp/ec2-instances-$logname
-aws ec2 describe-instances --filters "Name=tag:RunByUser,Values=$logname" >$FILE
+aws $region ec2 describe-instances --filters "Name=tag:RunByUser,Values=$logname" >$FILE
