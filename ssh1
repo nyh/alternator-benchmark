@@ -19,6 +19,9 @@
 # * fieldcount, fieldlength: Control the size of each item, as fieldcount
 #               attributes of size fieldlength each. The defaults are 10,256.
 # * time:       how much time (in seconds) to run the test. Defaults to 300.
+# * usertable:  how to call the table used for the YCSB test. This defaults
+#               to usertable_$(logname), but if you want to run multiple
+#               tests in parallel, you may need to change this.
 
 # take various ec2-* scripts from the current directory
 PATH=.:$PATH
@@ -28,6 +31,16 @@ set -ex
 # Write Isolation Mode to use in the test - "forbid_rmw" (no LWT) or
 # "always_use_lwt":
 isolation=${isolation-forbid_rmw}
+
+# Table name to be used in the test. Because when running on AWS DynamoDB
+# table names are shared by all users, let's use the user name as part of
+# the table name, to allow more than one user to run a benchmark in
+# parallel. Also allow to override the choice of name, in case the same
+# user wants to run multiple benchmarks in parallel they need to choose
+# a different table name for each test. We could use unique table names
+# for each test automatically, but that will increase the risk of leaving
+# expensive tables behind.
+usertable=${usertable-usertable_`logname`}
 
 # If "aws" environment variable is set, we test the real DynamoDB in that
 # Amazon region (e.g., "aws=us-east-1").
@@ -89,23 +102,24 @@ case $aws in
     # Pick one of the Scylla nodes as the one to send administrative
     # requests to:
     scylla_api=http://`ec2-ips scylla-db | head -1`:8080
+    AWS_CMD=aws
     ;;
 *)  # AWS
     scylla_api=http://dynamodb.$aws.amazonaws.com
+    AWS_CMD="aws --region $aws"
     ;;
 esac
 
-AWS_CMD="aws --region $aws"
 # Create the test table "usertable" (deleting it first if it exists)
 # FIXME: need to delete the table without snapshots, which just wastes
 # time on the server! If we can't configure Scylla properly, at least
 # ssh to the server and delete the snapshots :-(
 $AWS_CMD dynamodb delete-table \
     --endpoint-url $scylla_api \
-    --table-name usertable || :
+    --table-name $usertable || :
 $AWS_CMD dynamodb wait table-not-exists \
     --endpoint-url $scylla_api \
-    --table-name usertable
+    --table-name $usertable
 # set "wcu" (write capacity units) to create the table in provisioned billing
 # mode.. without it, use on-demand billing mode.
 if ! test -z "$wcu"
@@ -116,7 +130,7 @@ else
 fi
 $AWS_CMD dynamodb create-table \
     --endpoint-url $scylla_api \
-    --table-name usertable \
+    --table-name $usertable \
     --attribute-definitions \
         AttributeName=p,AttributeType=S \
     --key-schema \
@@ -125,7 +139,7 @@ $AWS_CMD dynamodb create-table \
     --tags Key=system:write_isolation,Value=$isolation
 $AWS_CMD dynamodb wait table-exists \
     --endpoint-url $scylla_api \
-    --table-name usertable
+    --table-name $usertable
 
 nodes=(`ec2-ips scylla-db`)
 
@@ -176,6 +190,7 @@ do
             # partition.
             ec2-ssh $loader "$YCSB run dynamodb -P workloads/workloada -threads 100 \
             $target \
+            -p table=$usertable \
             -p recordcount=1000000 \
             -p insertstart=$((i*1000000 )) \
             -p requestdistribution=uniform \
@@ -224,6 +239,6 @@ case $aws in
     # if it is a provisioned table!
     $AWS_CMD dynamodb delete-table \
         --endpoint-url $scylla_api \
-        --table-name usertable || :
+        --table-name $usertable || :
     ;;
 esac
