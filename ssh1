@@ -165,6 +165,8 @@ TMPDIR=/tmp/ssh1-$$
 mkdir $TMPDIR
 echo keeping stats in $TMPDIR
 
+maxexecutiontime=${time-300}
+
 typeset -i i=0
 for loader in ${loaders[@]}
 do
@@ -200,7 +202,7 @@ do
             -p updateproportion=0 \
             -p scanproportion=0 \
             -p insertproportion=1 \
-            -p maxexecutiontime=${time-300} \
+            -p maxexecutiontime=$maxexecutiontime \
             -p operationcount=999999999 \
             -p measurementtype=hdrhistogram \
             -p dynamodb.endpoint=$endpoint \
@@ -239,5 +241,8 @@ esac
 # * "time" of 600 (10 minutes) seems to give around 98% of the throughput
 # A more accurate approach would be to calculate # the total throughput at
 # each second and then graph (and average) those, but that's more complicated.
+set +x
 fgrep -h '[OVERALL], Throughput(ops/sec)' $TMPDIR/* |
-    awk '{sum+=$3} END {print "total throughput: " sum}'
+    awk '{sum+=$3} END {print "total throughput (incl. failures): " sum}'
+fgrep -h '[INSERT], Return=OK' $TMPDIR/* |
+    awk '{sum+=$3} END {print "successful INSERT throughput: " sum/'$maxexecutiontime'}'
