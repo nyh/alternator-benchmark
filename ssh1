@@ -167,30 +167,80 @@ echo keeping stats in $TMPDIR
 
 maxexecutiontime=${time-300}
 
-typeset -i i=0
-for loader in ${loaders[@]}
-do
-    for node in ${nodes[@]}
+# Function to run a certain YCSB command on all loaders, and on each
+# loader - one (or MULT) for each target node.
+# The function to run, $1, is run with "eval" (watch out!) and can use the
+# variables:
+#   nloaders - total number of loaders to be run (#loaders * #nodes * MULT)
+#   i - sequential number of loaders between 0 and nloaders
+#   loader - loader address
+#   node - node address
+#   mult - sequential number between 0 and MULT counting YCSB runs for
+#          same loader and node.
+run_ycsb_on_all_loaders() {
+    typeset -i i=0
+    nloaders=$((${#loaders[@]}*${#nodes[@]}*$MULT))
+    for loader in ${loaders[@]}
     do
-        case $aws in
-        "") # Scylla:
-            endpoint=http://$node:8080
-            ;;
-        *)  # AWS:
-            endpoint=http://dynamodb.$aws.amazonaws.com
-            ;;
-        esac
-        for mult in `seq $MULT`
+        for node in ${nodes[@]}
         do
-            let ++i
-            # For description of the following options, see
-            # https://github.com/brianfrankcooper/YCSB/blob/master/dynamodb/conf/dynamodb.properties
-            # NOTE: YCSB currently has two modes - "HASH" - with single-row
-            # partitions - and "HASH_AND_RANGE" - where we have a *single*
-            # partition and all the items in it. The HASH_AND_RANGE mode is
-            # worthless for benchmarking because it has a single hot
-            # partition.
-            ec2-ssh $loader "$YCSB run dynamodb -P workloads/workloada -threads 100 \
+            case $aws in
+            "") # Scylla:
+                endpoint=http://$node:8080
+                ;;
+            *)  # AWS:
+                endpoint=http://dynamodb.$aws.amazonaws.com
+                ;;
+            esac
+            for mult in `seq $MULT`
+            do
+                let ++i
+                # The ugly eval is to let the command ($1) interpolate
+                # variables that are different in each run (e.g., $i)
+                eval ec2-ssh $loader "\"$YCSB $1\"" > $TMPDIR/$loader-$node-$mult 2>&1 &
+            done
+        done
+    done
+    # Wait for all the loaders started above to fini
+    # TODO: catch interrupt and kill all the loaders.
+    wait
+}
+
+# For description of the following options, see
+# https://github.com/brianfrankcooper/YCSB/blob/master/dynamodb/conf/dynamodb.properties
+# NOTE: YCSB currently has two modes - "HASH" - with single-row
+# partitions - and "HASH_AND_RANGE" - where we have a *single*
+# partition and all the items in it. The HASH_AND_RANGE mode is
+# worthless for benchmarking because it has a single hot
+# partition.
+#
+
+case $workload in
+a)
+    # workloada is 50% reads, 50% updates of existing data, after a
+    # write-only loading phase which writes all the data.
+    # write nrecords per loader. Total writes are nloaders*nrecords.
+    nrecords=100000
+    run_ycsb_on_all_loaders 'load dynamodb -P workloads/workloada -threads 100 \
+            -p table=$usertable \
+            -p dynamodb.endpoint=$endpoint \
+            -p dynamodb.connectMax=200 \
+            -p dynamodb.consistentReads=true \
+            -p dynamodb.primaryKey=p \
+            -p dynamodb.primaryKeyType=HASH \
+            -p recordcount=1000 \
+            -p operationcount=1000 \
+            -p insertstart=$((i*nrecords)) \
+            -p insertcount=$nrecords \
+            -p recordcount=$((nloaders*nrecords)) \
+            -s'
+    # CONTINUE HERE! I'm not sure the "load" phase above is correct,
+    # and I'm missing the "run" phase for time $time.
+    # And of course nrecords should be a parameter.
+    ;;
+*)
+    # Write-only workload until given $time.
+    run_ycsb_on_all_loaders 'run dynamodb -P workloads/workloada -threads 100 \
             $target \
             -p table=$usertable \
             -p recordcount=1000000 \
@@ -211,14 +261,9 @@ do
             -p dynamodb.consistentReads=true \
             -p dynamodb.primaryKey=p \
             -p dynamodb.primaryKeyType=HASH \
-            -s" > $TMPDIR/$loader-$node-$mult 2>&1 &
-        done
-    done
-done
-
-# Wait for all the loaders started above to finish.
-# TODO: catch interrupt and kill all the loaders.
-wait
+            -s'
+    ;;
+esac
 
 case $aws in
 "") # Scylla
