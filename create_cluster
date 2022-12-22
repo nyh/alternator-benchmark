@@ -1,0 +1,64 @@
+#!/bin/bash
+
+region=${region-$aws}
+
+if [ -z "$region" ]; then
+    region=`aws configure get default.region`
+    if [ -z "$region" ]; then
+        echo "you must have either 'region' or 'aws' defined or to have default region configured in order to run this script"
+        exit 1
+    fi
+fi
+echo "Creating a cluster in region:$region"
+
+#create the cluster and the runner in the same region
+export SCT_REGION_NAME=$region
+export RUNNER_REGION=$region
+
+export RUNNER_DURATION=1440
+
+export SCT_SCYLLA_VERSION=${SCT_SCYLLA_VERSION-5.1.1}
+export SCT_RUN_DB_NODE_BENCHMARKS=${SCT_RUN_DB_NODE_BENCHMARKS-'false'}
+export SCT_ALTERNATOR_PORT=${SCT_ALTERNATOR_PORT-8080}
+export SCT_USER_PREFIX=${SCT_USER_PREFIX-'perf-alternator'}
+
+export SCT_INSTANCE_TYPE_DB=${SCT_INSTANCE_TYPE_DB-'i4i.2xlarge'}
+export SCT_INSTANCE_TYPE_LOADER=${SCT_INSTANCE_TYPE_LOADER-'c5.2xlarge'}
+#export SCT_INSTANCE_TYPE_MONITOR=${SCT_INSTANCE_TYPE_MONITOR-'t3.small'}
+
+export SCT_N_DB_NODES=${SCT_N_DB_NODES-3}
+export SCT_N_LOADERS=${SCT_N_LOADERS-4}
+export SCT_N_MONITORS_NODES=${SCT_N_MONITORS_NODES-1}
+
+
+runner_file=scylla-cluster-tests/sct_runner_ip
+runner_region_file=scylla-cluster-tests/sct_runner_region
+
+if [ -f $runner_file ]; then
+    runner_region=`cat $runner_region_file`
+    echo $runner_region
+    if [ "$runner_region" != "$RUNNER_REGION" ]; then
+        echo "the current runner region ($runner_region) is different than the requested region ($RUNNER_REGION), will use a new runner"
+        rm $runner_file
+    else
+        age=$((($(date +%s) - $(date +%s -r $runner_file)) / 60))
+        if [ $age -gt ${RUNNER_DURATION} ]; then
+            echo "Previous runner age in minute is $age (> $RUNNER_DURATION) which means it is probably dead - will use a new runner"
+            rm $runner_file
+        else
+            echo "Previous runner age in minute is $age (< $RUNNER_DURATION) which means it is probably alive - will try to use it"
+        fi
+    fi
+else
+    echo "Didn't find active runners - will create a new runner"
+fi
+
+echo -n $RUNNER_REGION > $runner_region_file
+
+if [ -f $runner_file ]; then
+    RUNNER_OPTION="--execute-on-runner `cat $runner_file`"
+else
+    RUNNER_OPTION="--execute-on-new-runner"
+fi
+
+( cd scylla-cluster-tests && docker/env/hydra.sh $RUNNER_OPTION run-pytest -b aws -c aws_cluster.yaml cluster_builder.py::ClusterBuilder::test_create_cluster )
