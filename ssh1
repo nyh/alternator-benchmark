@@ -194,10 +194,10 @@ run_ycsb_on_all_loaders() {
             esac
             for mult in `seq $MULT`
             do
-                let ++i
                 # The ugly eval is to let the command ($1) interpolate
                 # variables that are different in each run (e.g., $i)
                 eval ec2-ssh $loader "\"$YCSB $1\"" > $TMPDIR/$loader-$node-$mult 2>&1 &
+                let ++i
             done
         done
     done
@@ -233,10 +233,16 @@ a)
             -p insertstart=$((i*nrecords)) \
             -p insertcount=$nrecords \
             -p recordcount=$((nloaders*nrecords)) \
+            -p core_workload_insertion_retry_limit=10 \
+            -p core_workload_insertion_retry_interval=1 \
             -s'
-    # CONTINUE HERE! I'm not sure the "load" phase above is correct,
-    # and I'm missing the "run" phase for time $time.
-    # And of course nrecords should be a parameter.
+    # Uncomment this "scan" to verify that the load phase wrote the
+    # expected number of items.
+    #$AWS_CMD dynamodb scan \
+    #    --endpoint-url $scylla_api \
+    #    --table-name $usertable --select COUNT
+    # CONTINUE HERE! The "run" phase (and of course nrecords should be
+    # a parameter)
     ;;
 *)
     # Write-only workload until given $time.
