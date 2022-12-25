@@ -220,16 +220,13 @@ a)
     # workloada is 50% reads, 50% updates of existing data, after a
     # write-only loading phase which writes all the data.
     # write nrecords per loader. Total writes are nloaders*nrecords.
-    nrecords=100000
+    nrecords=${nrecords-10000}
     run_ycsb_on_all_loaders 'load dynamodb -P workloads/workloada -threads 100 \
             -p table=$usertable \
             -p dynamodb.endpoint=$endpoint \
             -p dynamodb.connectMax=200 \
-            -p dynamodb.consistentReads=true \
             -p dynamodb.primaryKey=p \
             -p dynamodb.primaryKeyType=HASH \
-            -p recordcount=1000 \
-            -p operationcount=1000 \
             -p insertstart=$((i*nrecords)) \
             -p insertcount=$nrecords \
             -p recordcount=$((nloaders*nrecords)) \
@@ -241,8 +238,17 @@ a)
     #$AWS_CMD dynamodb scan \
     #    --endpoint-url $scylla_api \
     #    --table-name $usertable --select COUNT
-    # CONTINUE HERE! The "run" phase (and of course nrecords should be
-    # a parameter)
+    run_ycsb_on_all_loaders 'run dynamodb -P workloads/workloada -threads 100 \
+            -p table=$usertable \
+            -p dynamodb.endpoint=$endpoint \
+            -p dynamodb.connectMax=200 \
+            -p dynamodb.consistentReads=true \
+            -p dynamodb.primaryKey=p \
+            -p dynamodb.primaryKeyType=HASH \
+            -p recordcount=$((nloaders*nrecords)) \
+            -p maxexecutiontime=$maxexecutiontime \
+            -p operationcount=999999999 \
+            -s'
     ;;
 *)
     # Write-only workload until given $time.
