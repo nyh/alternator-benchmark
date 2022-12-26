@@ -120,6 +120,24 @@ $AWS_CMD dynamodb delete-table \
 $AWS_CMD dynamodb wait table-not-exists \
     --endpoint-url $scylla_api \
     --table-name $usertable
+
+nodes=(`ec2-ips scylla-db`)
+
+# Unfortunately, Scylla is configured by default to keep snapshots
+# (https://github.com/scylladb/scylladb/issues/5283). This can fill the
+# disk when repeating the same test over and over. Let's delete the
+# old snapshots.
+case $aws in
+"") # Scylla
+    for n in ${nodes[@]}
+    do
+        ./ec2-ssh "$n" "sudo rm -rf /var/lib/scylla/data/alternator_$usertable/*/snapshots" &
+    done
+    wait
+    ;;
+esac
+
+
 # set "wcu" (write capacity units) to create the table in provisioned billing
 # mode.. without it, use on-demand billing mode.
 if ! test -z "$wcu"
@@ -141,23 +159,12 @@ $AWS_CMD dynamodb wait table-exists \
     --endpoint-url $scylla_api \
     --table-name $usertable
 
-nodes=(`ec2-ips scylla-db`)
-
 # Number of YCSB loaders to use per loader/server combination.
 # In other words, each loader will run MULT*nservers ycsb processes, and each
 # server will be loaded by MULT*nloaders ycsb processes.
 # TODO: I don't understand why with say fieldcount=1 MULT=2 it takes a very
 # long time to get higher results than MULT=1.
 MULT=${MULT-1}
-
-if ! test -z "$wcu"
-then
-    nycsb=$((${#loaders[@]} * ${#nodes[@]} * MULT))
-    target="-target $((wcu/nycsb))"
-else
-    target=
-fi
-
 
 TMPDIR=/tmp/ssh1-$$
 #trap 'rm -r /tmp/ssh1-$$' 0 1 2 3 15
@@ -196,6 +203,7 @@ run_ycsb_on_all_loaders() {
             do
                 # The ugly eval is to let the command ($1) interpolate
                 # variables that are different in each run (e.g., $i)
+                eval echo "\"$YCSB $1\""
                 eval ec2-ssh $loader "\"$YCSB $1\"" > $TMPDIR/$loader-$node-$mult 2>&1 &
                 let ++i
             done
@@ -250,13 +258,18 @@ a)
             -p operationcount=999999999 \
             -s'
     ;;
-*)
+w|*)
     # Write-only workload until given $time.
+    if ! test -z "$wcu"
+    then
+        target="-target $((wcu/nloaders))"
+    else
+        target=
+    fi
     run_ycsb_on_all_loaders 'run dynamodb -P workloads/workloada -threads 100 \
             $target \
             -p table=$usertable \
-            -p recordcount=1000000 \
-            -p insertstart=$((i*1000000 )) \
+            -p recordcount=10000000 \
             -p requestdistribution=uniform \
             -p fieldcount=${fieldcount-10} \
             -p fieldlength=${fieldlength-256} \
@@ -270,7 +283,6 @@ a)
             -p dynamodb.endpoint=$endpoint \
             -p dynamodb.connectMax=200 \
             -p requestdistribution=uniform \
-            -p dynamodb.consistentReads=true \
             -p dynamodb.primaryKey=p \
             -p dynamodb.primaryKeyType=HASH \
             -s'
