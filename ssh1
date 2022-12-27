@@ -262,6 +262,7 @@ w|*)
     # Write-only workload until given $time.
     if ! test -z "$wcu"
     then
+        # FIXME: need to divide by item size!
         target="-target $((wcu/nloaders))"
     else
         target=
