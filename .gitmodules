@@ -1,0 +1,4 @@
+[submodule "scylla-cluster-tests"]
+	path = scylla-cluster-tests
+	url = git@github.com:eliransin/scylla-cluster-tests
+	branch = sct-benchmarks

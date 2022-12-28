@@ -27,7 +27,8 @@
 PATH=.:$PATH
 
 set -ex
-
+# export aws in case it is defined so region dependent scripts will work as expected
+export aws
 # Write Isolation Mode to use in the test - "forbid_rmw" (no LWT) or
 # "always_use_lwt":
 isolation=${isolation-forbid_rmw}
@@ -87,7 +88,7 @@ wait
 #   mvn -pl site.ycsb:dynamodb-binding -am clean package -DskipTests
 #   mkdir OUT
 #   tar zxvf dynamodb/target/ycsb-dynamodb-binding* -C OUT --strip-components 1
-MY_YCSB_DIR=${MY_YCSB_DIR-/home/nyh/YCSB/OUT}
+MY_YCSB_DIR=${MY_YCSB_DIR-$HOME/YCSB/OUT}
 YCSB="cd ycsb; bin/ycsb"
 for loader in ${loaders[@]}
 do
@@ -102,7 +103,8 @@ case $aws in
     # Pick one of the Scylla nodes as the one to send administrative
     # requests to:
     scylla_api=http://`ec2-ips scylla-db | head -1`:8080
-    AWS_CMD=aws
+    #just pus a pseudo region so it will work even if one didn't configure his default region for aws command
+    AWS_CMD="aws --region us-east-1"
     ;;
 *)  # AWS
     scylla_api=http://dynamodb.$aws.amazonaws.com
