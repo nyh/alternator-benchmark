@@ -1,0 +1,11 @@
+#/bin/bash
+
+rm -rf ycsb_exec
+mkdir -p ycsb_exec
+(
+    cd YCSB
+    mvn -pl site.ycsb:dynamodb-binding -am clean compile package -DskipTests
+    mvn -pl site.ycsb:scylla-binding -am clean compile package -DskipTests
+)
+tar zxvf YCSB/dynamodb/target/ycsb-dynamodb-binding* -C ycsb_exec --strip-components 1
+tar zxvf YCSB/scylla/target/ycsb-scylla-binding* -C ycsb_exec --strip-components 1

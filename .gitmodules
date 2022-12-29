@@ -2,3 +2,7 @@
 	path = scylla-cluster-tests
 	url = git@github.com:eliransin/scylla-cluster-tests
 	branch = sct-benchmarks
+[submodule "YCSB"]
+	path = YCSB
+	url = git@github.com:eliransin/YCSB
+	branch = alternator-benchmark
