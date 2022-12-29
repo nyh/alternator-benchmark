@@ -4,5 +4,6 @@
 # 400 seconds (66 minutes)
 # Uses AWS STS - see
 # https://docs.aws.amazon.com/STS/latest/APIReference/API_GetSessionToken.html
-aws sts get-session-token --duration 4000 |
+duration=${1-4000}
+aws sts get-session-token --duration $duration |
 jq -r '"[default]\n" + "aws_access_key_id = " +.Credentials.AccessKeyId + "\naws_secret_access_key = " + .Credentials.SecretAccessKey + "\naws_session_token = " + .Credentials.SessionToken'
