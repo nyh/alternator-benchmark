@@ -2,7 +2,7 @@
 
 for loader in `./ec2-ips loader`
 do
-    ./ec2-ssh $loader pkill -f ycsb-0.15.0 &
+    ./ec2-ssh $loader pkill -f ".*ycsb.*" &
     ./ec2-ssh $loader sudo pkill -f java &
 done
 # After spawning all the ssh's in parallel, we wait for all of them to finish.
