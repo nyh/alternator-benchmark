@@ -1,0 +1,728 @@
+#!/bin/bash
+
+#UTILITY FUNCIONS
+trim() {
+    local trimmed=$1
+    trimmed=${trimmed##+([[:space:]])}
+    trimmed=${trimmed%%+([[:space:]])}
+    echo "$trimmed"
+}
+#
+# ssh1 - script to connect to an existing Scylla cluster + loaders previous
+# created with SCT using the script nyh/run2a3, and run a benchmark.
+#
+# What exactly ssh1 runs can be chosen with environment variables:
+#
+# * (unconditional right now) Run write throughput benchmark
+# * isolation:  set to "forbid_rmw" for writes without LWT (the default),
+#               or to "always_use_lwt" (with LWT).
+# * aws:        if empty (default), benchmark the Scylla servers.
+#               If "aws is set, we test the real DynamoDB in that Amazon
+#               region (e.g., "aws=us-east-1").
+# * wcu:        The WCU (write capacity units) to create the table in
+#               provisioned billing mode. without it, use on-demand billing
+#               mode. Ignored in !aws mode.
+#               wcu is also used to set the maximum rate sent by each loader
+#               to wcu / number_of_loaders.
+# * fieldcount, fieldlength: Control the size of each item, as fieldcount
+#               attributes of size fieldlength each. The defaults are 10,256.
+# * time:       how much time (in seconds) to run the test. Defaults to 300.
+# * usertable:  how to call the table used for the YCSB test. This defaults
+#               to usertable_$(logname), but if you want to run multiple
+#               tests in parallel, you may need to change this.
+
+
+# take various ec2-* scripts from the current directory
+
+dynamodb=false
+default_region=`aws configure get default.region` || :
+region=${region-$default_region}
+#target=""
+op="run"
+time=300
+dry_run=""
+pre_delete_table=false
+post_delete_table=false
+# Table name to be used in the test. Because when running on AWS DynamoDB
+# table names are shared by all users, let's use the user name as part of
+# the table name, to allow more than one user to run a benchmark in
+# parallel. Also allow to override the choice of name, in case the same
+# user wants to run multiple benchmarks in parallel they need to choose
+# a different table name for each test. We could use unique table names
+# for each test automatically, but that will increase the risk of leaving
+# expensive tables behind.
+usertable=usertable_`logname`
+isolation="forbid_rmw"
+db="alternator"
+db_list=( "alternator" "dynamodb" "scylla" )
+dynamo_like=( "alternator" "dynamodb" )
+configs=""
+default_configs="workloads/defaults/default workloads/defaults/measurements"
+op="run"
+op_list=( "run" "load" )
+time=4000
+OUT_DIR=`realpath ./results`
+YCSB_DIR=`realpath ./ycsb_exec`
+MULT=1
+usage() {
+    echo "./ssh1 [options] [-- options to pass to YCSB"
+    echo "Options:"
+    echo "--make-ycsb - will build and prepare ycsb for this script, all other options will be ignored and the script will exit a the end."
+    echo "--region - the region to operate on, default: ENV['region'] if defined, else, the default region configured in aws"
+    echo "--db - the database to run on, one of  (${db_list[@]}), default: $db"
+    echo "--config/-c <workload_path> - a config file path to include, can use multiple files that will be layered in order, default is 'workloads/workloada"
+    echo "--op - The operation to perform, one of (${op_list[@]}), default:$op"
+    echo "--usertable <usertable_name> - the name of the table to use, dfault: $usertable"
+    echo "--lwt - if given, will use lwt in the tests for alternator runs, else will forbid it (which will make alternator faster for some operations)."
+    echo "--wcu <wcu_count> - the write capacity units to provision. if not given will be computed from target"
+    echo "--rcu <rcu_count> - the read capacity units to provision. if not given will be computed from target"
+    echo "--pay-per-request - if given, wcu and rcu will be ignored and a PAY_PER_REQUEST billing mode will be initiated, else wcu and rcu will be used"
+    echo "--pre-delete - don't delete the table before running the command"
+    echo "--post-delete - don't delete the table after running the command"
+    echo "--outputdir/-o - the directory to place the output files from the run, default:'$OUT_DIR'"
+    echo "--debug - sets verbose printout for this shell script"
+    echo "--target - taget ops per second, will not be set if not given"
+    echo "--dry-run - do not perform any operations agains the databases (for testing purposes)" 
+    echo "--time - the maximum time in seconds for the aws certificates to last. The actual time will be the maximum between this and the maxexecutiontime property of the ycsb properties default: $time"
+    echo "--mult - How many ycsb loaders per scylla node to run, deault: $MULT"
+    echo "-h,--help - print this message and quit"
+}
+
+
+#parse command line arguments
+while [ "${1:-}" != "" ]; do
+    option=$1
+    case "$option" in
+        "--make-ycsb")
+            rm -f ./make_ycsb.log
+            echo "Building YCSB..."
+            ./make_ycsb 1>make_ycsb.log 2>&1
+            build_result=$?
+            if [ "$build_result" == "0" ];
+            then
+                rm -f ./make_ycsb.log
+                echo "Done - good to go :)"
+            else
+                echo "Something went rong during YCSB build please check "`realpath ./make_ycsb.log`" for hints."
+            fi
+            exit $build_result
+        ;;
+        "--region" | "-r")
+            shift
+            region=$1
+            ;;
+        "--db")
+            shift
+            db=$1
+            if [[ ! " ${db_list[*]} " =~ " $db " ]];
+            then
+                echo "$option: invalid value '$db', must be one of ${db_list[@]}"
+                exit 1
+            fi
+            ;;
+        "--config" | "-c")
+            shift
+            config_path=$1
+            if [ ! -f $config_path ]; then
+                echo "$option: Config file $wl_path doesn't exist"
+                exit 1
+            fi
+            configs="$configs"" $config_path"
+            ;;
+        "--op")
+            shift
+            op=$1
+            if [[ ! " ${op_list[*]} " =~ " $op " ]];
+            then
+                echo "$option: invalid value '$op', must be one of ${op_list[@]}"
+                exit 1
+            fi
+            ;;
+        "--usertable")
+            shift
+            usertable=$1
+            ;;
+        "--lwt")
+            isolation="always_use_lwt"
+            lwt=true
+            ;;
+        "--")
+            shift
+            break
+            ;;
+        "--wcu")
+            shift
+            wcu=$1
+            ;;
+        "--rcu")
+            shift
+            rcu=$1
+            ;;
+        "--pay-per-request")
+            pay_per_request=true
+            ;;
+        "-h" | "--help")
+            usage
+            exit 0
+            ;;
+        "--pre-delete")
+            pre_delete_table=true
+            ;;
+        "--post-delete")
+            post_delete_table=true
+            ;;
+        "--outputdir" | "-o")
+            shift
+            OUT_DIR=`realpath $1`
+            ;;
+        "--debug")
+            debug=true
+            ;;
+        "--dry-run")
+            dry_run=true
+            ;;
+        "--target")
+            shift
+            target=$1
+            ;;
+        "--time")
+            shift
+            time=$1
+            ;;
+        "--mult")
+            shift
+            mult=$1
+            ;;
+        *)
+            echo "Unknown option $option"
+            usage
+            exit 1
+            ;;
+    esac
+    shift
+done
+#check parameters correctnes (as much as possible...)
+if [ ! -d "$YCSB_DIR" ];
+then
+    echo "YCSB executables doesn't exist please run '$1 --make-ycsb' to prepare them" >&2
+    exit 1
+fi
+if [ -z "$region" ]; then
+    echo "No region was given, and also no default region defined in aws please either use --region option or define a default region for aws" >&2
+    exit 1
+fi
+
+if [ -z "${pay_per_request}${rcu}${wcu}${target}" ];
+then
+    echo "At least one of: --target, --rcu, --wcu, --pay-per-request must be given" >&2
+    exit 1
+fi
+
+#prepare the output dir for results and run logs
+#remove trailing slashes
+RUN_ID=`date +%s`
+OUT_DIR=${OUT_DIR%%+(/)/}
+OUT_DIR=${OUT_DIR}/benchmark-$RUN_ID-$db-$op
+mkdir -p ${OUT_DIR}
+LOADERS_OUT_DIR=${OUT_DIR}/loaders
+mkdir -p ${LOADERS_OUT_DIR}
+if [ -L latest ];
+then
+    rm latest
+fi
+ln -sf ${OUT_DIR} latest
+runlog=${OUT_DIR}/run.log
+errorlog=${OUT_DIR}/error.log
+bashtrace=${OUT_DIR}/bashtrace.log
+
+
+#setup output logging
+exec 5>$bashtrace 2> >(tee $errorlog) 1> >(tee $runlog)
+
+#Route bash to the created file and make it anotate the line of execution
+PS4='$LINENO: '
+BASH_XTRACEFD=5
+if [ -n "$debug" ];
+then
+    set -exv
+else
+    set -ex
+fi
+
+
+##### START ######
+SECONDS=0
+echo "Run started at:"`date`
+
+PATH=.:$PATH
+
+# export region so region dependent scripts will work as expected
+export region
+
+REMOTE_LODAER_DIR=/tmp/ycsb-results-$RUN_ID
+cmdline="$0 $*"
+
+if [ -z "$configs" ];
+then
+    configs=" workloads/workloada"
+    echo "No config file given - defulting to$configs"
+fi
+
+default_configs="$default_configs workloads/defaults/$db"
+
+echo "Command line used: $cmdline"
+echo "db:$db, op:$op, pre_delet_table:$pre_delete_table, post_delete_table:$post_delete_table, mult:$MULT"
+
+#Prepare the ycsb command parameters
+
+configs_unified="$default_configs $configs"
+configs_unified=$(trim "$configs_unified")
+configs_for_ycsb=""
+configs_for_properties=""
+
+for conf_file in $configs_unified;
+do
+    configs_for_ycsb="$configs_for_ycsb ""-P $conf_file"
+    configs_for_properties="${configs_for_properties} -P "`realpath $conf_file`
+done
+
+configs_for_ycsb=$(trim "$configs_for_ycsb")
+configs_for_properties=$(trim "$configs_for_properties")
+
+case "$db" in
+    "alternator" | "dynamodb")
+        db_params='-p dynamodb.region=$region'
+        db_per_loader_params='-p dynamodb.endpoint=$endpoint'
+        ;;
+    "scylla")
+        db_params=""
+        if [ -n "$lwt" ];
+        then
+        db_params="-p scylla.lwt=true"
+        fi
+        db_per_loader_params=""
+        ;;
+esac
+
+# we would like to have the results in files on the loader system which we will download as soon as the run finishes.
+db_per_loader_params="${db_per_loader_params} -p hdrhistogram.fileoutput=true -p hdrhistogram.output.path=$REMOTE_LODAER_DIR/"'loader-$i-'" -p measurement.raw.output_file=$REMOTE_LODAER_DIR/"'loader-$i-raw.txt'
+
+# build the command arguments - this command should be evaluated twise.
+# once for extracting the per database "parameter packs" and the second time
+# on the loader to compute the actual loader dependent vals.
+if [[ " ${dynamo_like[*]} " =~ " $db " ]];
+then
+    db_binding=dynamodb
+else
+    db_binding=scylla
+fi
+
+ycsb_command_params='$op $db_binding $configs_for_ycsb -p table=$usertable $db_params $db_per_loader_params $@'
+
+#extract the set properties
+
+ycsb_properties_params=`(
+    op=shell
+    db_binding=basic
+    endpoint=dummy_endpoint
+    target=""
+    configs_for_ycsb="$configs_for_properties"
+    db_per_loader_params=""
+    level_1_eval=$(eval echo $ycsb_command_params)
+    eval echo $level_1_eval
+)`
+
+# We use the .sh version of the script to avoid python incompatibilities
+properties_line=`yes quit | $YCSB_DIR/bin/ycsb.sh $ycsb_properties_params | sed -nE '/\s+\*+\s*\*+/,/\*+/p' | tail -n +2 | head -n -1 | sed 's/"//g' | sed -E 's/([^=]+)=/\[\1\]=/g'`
+eval declare -A properties=( $properties_line )
+
+# Fill in the defult stuff so we can operate on it later
+properties["fieldcount"]=${properties["fieldcount"]-10}
+properties["fieldlength"]=${properties["fieldlength"]-100}
+properties["minfieldlength"]=${properties["minfieldlength"]-1}
+properties["readallfields"]=${properties["readallfields"]-true}
+properties["writeallfields"]=${properties["writeallfields"]-false}
+properties["readproportion"]=${properties["readproportion"]-0.95}
+properties["updateproportion"]=${properties["updateproportion"]-0.05}
+properties["insertproportion"]=${properties["insertproportion"]-0}
+properties["scanproportion"]=${properties["scanproportion"]-0}
+properties["readmodifywriteproportion"]=${properties["readmodifywriteproportion"]-0}
+properties["requestdistribution"]=${properties["requestdistribution"]-uniform}
+properties["minscanlength"]=${properties["minscanlength"]-1}
+properties["maxscanlength"]=${properties["maxscanlength"]-1000}
+properties["scanlengthdistribution"]=${properties["scanlengthdistribution"]-uniform}
+# Those properties are deliberately left out as they are changed per loader
+#properties["insertstart"]=${properties["insertstart"]:0}
+#properties["insertcount"]=${properties["insertcount"]:0}
+properties["zeropadding"]=${properties["zeropadding"]-1}
+properties["insertorder"]=${properties["insertorder"]-hashed}
+properties["fieldnameprefix"]=${properties["fieldnameprefix"]-field}
+properties["fieldlengthdistribution"]=${properties["fieldlengthdistribution"]-constant}
+properties["insertorder"]=${properties["insertorder"]-hashed}
+properties["fieldnameprefix"]=${properties["fieldnameprefix"]-field}
+properties["maxexecutiontime"]=${properties["maxexecutiontime"]-0}
+
+
+if [ ${properties["maxexecutiontime"]} -gt $time ];
+then
+    #add 5 minutes to this just so we don't run out of certificate mid run
+    time=$(( ${properties["maxexecutiontime"]} + 300 ))
+fi
+echo "Time for cetificates in seconds is $time"
+echo ""
+
+echo "Properties used in this run:"
+echo "${properties_line}"
+
+#maybe we have target in one of our properties files
+
+if [ -z "$target" ];
+then
+    target=${properties["target"]}
+fi
+
+if [ "$pay_per_request" != "true" ] && [[ " ${dynamo_like[*]} " =~ " $db " ]];
+then
+    # here we assume that maybe some of the parameters are not defined
+    # if we don't want to pay per request we will need to have target,wcu and rcu defined
+    provision_calc_command="python calc_provision.py --op=$op --fieldlength=${properties["fieldlength"]} --fieldcount=${properties["fieldcount"]} \
+    --read_proportion=${properties["readproportion"]} --insert_proportion=${properties["insertproportion"]} \
+    --update_proportion=${properties["updateproportion"]} --scan_proportion=${properties["scanproportion"]}"
+    if  [ -n "$target" ];
+    then
+        provision_calc_command="$provision_calc_command --target=${target}"
+    fi
+    if [ -n "$wcu" ];
+    then
+        provision_calc_command="$provision_calc_command --wcu=${wcu}"
+    fi
+    if [ -n "$rcu" ];
+    then
+        provision_calc_command="$provision_calc_command --rcu=${rcu}"
+    fi
+    provision_params=`$provision_calc_command`
+    echo "Provisioning params are: $provision_params"
+    eval $provision_params
+else
+    echo "no rovisioning params needed"
+fi
+
+if [ -n "${properties['target']}" ];
+then
+    properties["target"]=$target
+fi
+
+# Dump the properties to a file for reproducibiliy - do it sorted so the files can be easily compared
+prop_file=$OUT_DIR/properties
+( 
+    for key in ${!properties[@]};
+    do
+        echo "$key = ${properties[$key]}"
+    done
+) | sort > $prop_file
+
+
+# Prepare credentials for YCSB to use
+# Modified YCSB using ~/.aws/credentials and not a separate file
+if [ "$db" == "dynamodb" ]; then
+    #DynamoDB
+    ./ec2-temporary-key $time >/tmp/alternator-credentials
+else
+    # Scylla or alternator
+    cat <<END >/tmp/alternator-credentials
+    aws_access_key_id = alternator
+    aws_secret_access_key = alternator_secret_access_key
+END
+fi
+
+
+
+# refresh the instances list and ips
+ec2-refresh
+
+
+loaders=(`ec2-ips loader`)
+nloaders=${#loaders[@]}
+nodes=(`ec2-ips scylla-db`)
+nnodes=${#nodes[@]}
+
+
+nycsb=$((${nloaders} * ${nnodes} * MULT))
+
+echo "number of loader machines is $nloaders, number of scylla nodes is $nnodes, number of ycsb workers: $nycsb"
+
+#Set the target per loader if taget is set
+if [ -n "$target" ];
+then
+    echo "The total targeted ops/s is: $target"
+    target_per_loader=$(( $target/$nycsb ))
+    echo "The targeted ops/s per loader is: $target_per_loader"
+    db_per_loader_params="$db_per_loader_params -p target=${target_per_loader}"
+fi
+
+
+
+# Set up loader machines
+
+# calculate the hosts parameter to ycsb (For Scylla)
+if [ "$db" == "scylla" ];
+then
+    nodes_private=(`ec2-private-ips scylla-db`)
+    hosts_list=""
+    for pnode in ${nodes_private[@]};
+    do
+        hosts_list=$hosts_list",$pnode"
+    done
+    hosts_list=${hosts_list:1}
+    db_per_loader_params=$db_per_loader_params" -p scylla.hosts=$hosts_list"
+fi
+
+#Distribute the load  against all the nodes
+#TODO: check that nycsb > recodcount
+
+#if [ "$op" == "load" ];
+#then
+    nrecords=$((${properties["recordcount"]}/nycsb))
+    declare -a insertcounts
+    for i in `seq 0 $(($nycsb - 2))`;
+    do
+        insertcounts[$i]=$nrecords
+    done
+    last_loader_count=$(( ${properties["recordcount"]} - ( $nrecords * ( $nycsb - 1 ) ) ))
+    insertcounts[$(( $nycsb - 1 ))]=$last_loader_count
+    db_per_loader_params="$db_per_loader_params "'-p insertcount=${insertcounts[i]} -p insertstart=$((nrecords*i))'
+#fi
+
+# Prepare the loaders - Upload everything needed for them to operate
+if [ -z "$dry_run" ];
+then
+(
+    for loader in ${loaders[@]}
+    do
+        # Upload Credentials if needed
+        if [[ " ${dynamo_like[*]} " =~ " $db " ]];
+        then
+            (
+                ec2-ssh $loader mkdir -p .aws
+                ec2-scp /tmp/alternator-credentials $loader:.aws/credentials
+            )&
+        fi
+        # Sync ycsb and the workload files
+        (
+            # Sync YCSB to all loaders - we have to delete the extranous files because it messes up with the java packages.
+            ec2-rsync -aPz --delete $YCSB_DIR/ $loader:ycsb/ 1>&2
+            # Sync all workloads to YCSB
+            ec2-rsync -aPz workloads $loader:ycsb/ 1>&2
+            ec2-ssh $loader mkdir -p $REMOTE_LODAER_DIR
+        )&
+        # Sync YCSB
+    done
+    wait
+)
+fi
+
+YCSB="cd ycsb; bin/ycsb"
+
+
+if [ "$db" == "dynamodb" ]; 
+then
+    scylla_api=http://dynamodb.$region.amazonaws.com
+elif [ "$db" == "alternator" ];
+then
+    # Scylla
+    # Pick one of the Scylla nodes as the one to send administrative
+    # requests to:
+    scylla_api=http://${nodes[0]}:8080
+fi
+
+AWS_CMD="aws --region $region"
+
+
+delete_scylladb_table() {
+    if [ -n "$dry_run" ];
+    then
+        return 0
+    fi
+    ec2-ssh ${loaders[0]} cqlsh ${nodes_private[0]} -e "\"DROP TABLE IF EXISTS ${properties['scylla.keyspace']}.$usertable\""
+}
+
+create_or_update_scylladb_table() {
+    if [ -n "$dry_run" ];
+    then
+        return 0
+    fi
+
+    ec2-ssh ${loaders[0]} cqlsh ${nodes_private[0]} -e "\"CREATE KEYSPACE IF NOT EXISTS ${properties['scylla.keyspace']} WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor' : '3'}\""
+    scylla_fields="y_id varchar primary key"
+    for i in `seq 0 $(( ${properties['fieldcount']} - 1 ))`;
+    do
+        scylla_fields=$scylla_fields", field$i varchar"
+    done
+    ec2-ssh ${loaders[0]} cqlsh ${nodes_private[0]} -e "\"CREATE TABLE IF NOT EXISTS ${properties['scylla.keyspace']}.$usertable ( $scylla_fields );\""
+
+}
+# Create the test table "usertable" (deleting it first if it exists)
+# FIXME: need to delete the table without snapshots, which just wastes
+# time on the server! If we can't configure Scylla properly, at least
+# ssh to the server and delete the snapshots :-(
+delete_dynamo_table() {
+    if [ -n "$dry_run" ];
+    then
+        return 0
+    fi
+    $AWS_CMD dynamodb delete-table \
+            --endpoint-url $scylla_api \
+            --table-name $usertable || :
+    $AWS_CMD dynamodb wait table-not-exists \
+            --endpoint-url $scylla_api \
+            --table-name $usertable
+}
+
+# if the table exists we only update the biling mode and tagging (for alternator LWT)
+create_or_update_dynamodb_table() {
+    if [ -n "$dry_run" ];
+    then
+        return 0
+    fi
+    billing_mode="$1"
+    table_exists=$($AWS_CMD dynamodb describe-table --table-name=$usertable --endpoint-url $scylla_api | jq  -r '.Table.TableArn' 2>/dev/null)
+    if [ -z "$table_exists" ];
+    then
+        echo "Table doesn't exist - creating it"
+        $AWS_CMD dynamodb create-table \
+            --endpoint-url $scylla_api \
+            --table-name $usertable \
+            --attribute-definitions \
+                AttributeName=p,AttributeType=S \
+            --key-schema \
+                AttributeName=p,KeyType=HASH \
+            $billing_mode \
+            --tags Key=system:write_isolation,Value=$isolation
+    else
+        # Update the billing mode for Dynamodb
+        $AWS_CMD dynamodb update-table \
+            --endpoint-url $scylla_api \
+            --table-name $usertable \
+            $billing_mode
+        
+        # Update the write isolation for altenrator
+        $AWS_CMD dynamodb tag-resource --endpoint-url $scylla_api --resource-arn $table_exists --tags Key=system:write_isolation,Value=$isolation
+        
+    fi
+    $AWS_CMD dynamodb wait table-exists \
+            --endpoint-url $scylla_api \
+            --table-name $usertable
+}
+
+
+#Set the target
+if [ -n "$target" ];
+then
+    echo "The total targeted ops/s is: $target"
+    target=$(( $target/$nycsb ))
+    echo "The targeted ops/s per loader is: $target"
+    db_per_loader_params="$db_per_loader_params -p target=${target}"
+fi
+# Preconditions for tables - delete if needed, create r update if needed.
+if [[ " ${dynamo_like[*]} " =~ "$db" ]];
+then
+    if [ "$pre_delete_table" == "true" ];
+    then
+            delete_dynamo_table
+    else
+        echo "skipping pre deletion of dynamodb table $usertable"
+    fi
+
+    # set "wcu" (write capacity units) to create the table in provisioned billing
+    # mode.. without it, use on-demand billing mode.
+    if [ "$pay_per_request" == "true" ];
+    then
+        billing_mode="--billing-mode PAY_PER_REQUEST"
+    else
+        billing_mode="--billing-mode PROVISIONED --provisioned-throughput ReadCapacityUnits=$rcu,WriteCapacityUnits=$wcu"
+    fi
+    create_or_update_dynamodb_table "$billing_mode"
+else #scylla
+    if [ "$pre_delete_table" == "true" ];
+    then
+            delete_scylladb_table
+    else
+        echo "skipping pre deletion of dynamodb table $usertable"
+    fi
+    create_or_update_scylladb_table
+fi
+
+
+# Function to run a certain YCSB command on all loaders, and on each
+# loader - one (or MULT) for each target node.
+# The function to run, $1, is run with "eval" (watch out!) and can use the
+# variables:
+#   nloaders - total number of loaders to be run (#loaders * #nodes * MULT)
+#   i - sequential number of loaders between 0 and nloaders
+#   loader - loader address
+#   node - node address
+#   mult - sequential number between 0 and MULT counting YCSB runs for
+#          same loader and node.
+# run on a subshell
+run_ycsb_on_all_loaders() {(
+    
+    typeset -i i=0
+    #nloaders=$((${#loaders[@]}*${#nodes[@]}*$MULT))
+    for loader in ${loaders[@]}
+    do
+        for node in ${nodes[@]}
+        do
+            if [ "$db" == "dynamodb" ];
+            then
+                endpoint=http://dynamodb.$region.amazonaws.com
+            else
+                endpoint=http://$node:8080
+            fi            
+            for mult in `seq $MULT`
+            do                
+                # The ugly eval is to let the command ($1) interpolate
+                # variables that are different in each run (e.g., $i)
+                eval echo "loader$i command is: ""\"$YCSB $1\""
+                if [ -z "$dry_run" ];
+                then
+                    eval ec2-ssh $loader "\"$YCSB $1\"" > $LOADERS_OUT_DIR/loader-$i-$loader-$node-$mult 2>&1 &
+                else
+                    eval echo $loader "\"$YCSB $1\"" > $LOADERS_OUT_DIR/loader-$i-$loader-$node-$mult 2>&1 &
+                fi
+                let ++i
+            done
+        done
+    done
+    # Wait for all the loaders started above to finish
+    # TODO: catch interrupt and kill all the loaders.
+    wait
+    for loader in ${loaders[@]}
+    do
+        ec2-rsync -aPz $loader:$REMOTE_LODAER_DIR/ $LOADERS_OUT_DIR/ 1>&2 &
+    done
+    wait
+)}
+
+#Prepate the final ycsb command - after this line it will only contain loader dependant variables (i)
+loaders_ycsb_command=`( eval echo $ycsb_command_params )`
+
+WORKLOADS_RUNTIME=$SECONDS
+run_ycsb_on_all_loaders "$loaders_ycsb_command"
+
+# Delete the table if needed
+if [ "$post_delete_table" == "true" ];
+then
+    if [[ " ${dynamo_like[*]} " =~ " $db " ]];
+    then
+        delete_dynamo_table
+    else # Scylla
+        delete_scylladb_table
+    fi
+else
+    echo "Skipping table post deletion of $usertable"
+fi
+
+# Process the results
+python process_results.py $LOADERS_OUT_DIR 1>&2
+WORKLOADS_RUNTIME=$(( ${SECONDS} - ${WORKLOADS_RUNTIME} ))
+echo "Run ended at:"`date`" and took $SECONDS seconds, workloads ran for $WORKLOADS_RUNTIME seconds"
