@@ -1,0 +1,4 @@
+dynamodb.primaryKey = p
+dynamodb.primaryKeyType = HASH
+dynamodb.consistentReads = true
+dynamodb.connectMax = 20

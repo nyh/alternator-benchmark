@@ -1,0 +1,3 @@
+scylla.keyspace = ycsb
+scylla.coreconnections = 2
+scylla.maxconnections = 8

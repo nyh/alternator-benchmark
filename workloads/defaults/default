@@ -1,0 +1,5 @@
+core_workload_insertion_retry_limit = 10
+core_workload_insertion_retry_interval = 10
+threadcount = 50
+maxexecutiontime = 300
+operationcount = 0
