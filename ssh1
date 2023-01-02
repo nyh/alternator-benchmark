@@ -243,9 +243,9 @@ a)
             -s'
     # Uncomment this "scan" to verify that the load phase wrote the
     # expected number of items.
-    #$AWS_CMD dynamodb scan \
-    #    --endpoint-url $scylla_api \
-    #    --table-name $usertable --select COUNT
+    $AWS_CMD dynamodb scan \
+        --endpoint-url $scylla_api \
+        --table-name $usertable --select COUNT
     run_ycsb_on_all_loaders 'run dynamodb -P workloads/workloada -threads 100 \
             -p table=$usertable \
             -p dynamodb.endpoint=$endpoint \
@@ -255,7 +255,45 @@ a)
             -p dynamodb.primaryKeyType=HASH \
             -p recordcount=$((nloaders*nrecords)) \
             -p maxexecutiontime=$maxexecutiontime \
-            -p operationcount=999999999 \
+            -p operationcount=0 \
+            -s'
+    ;;
+r)
+    # read-only workload after a write-only loading phase which writes
+    # nrecords per loader (total items are nloaders*nrecords).
+    nrecords=${nrecords-10000}
+    run_ycsb_on_all_loaders 'load dynamodb -P workloads/workloada -threads 100 \
+            -p table=$usertable \
+            -p dynamodb.endpoint=$endpoint \
+            -p dynamodb.connectMax=200 \
+            -p dynamodb.primaryKey=p \
+            -p dynamodb.primaryKeyType=HASH \
+            -p insertstart=$((i*nrecords)) \
+            -p insertcount=$nrecords \
+            -p recordcount=$((nloaders*nrecords)) \
+            -p core_workload_insertion_retry_limit=10 \
+            -p core_workload_insertion_retry_interval=1 \
+            -s'
+    # Uncomment this "scan" to verify that the load phase wrote the
+    # expected number of items.
+    #$AWS_CMD dynamodb scan \
+    #    --endpoint-url $scylla_api \
+    #    --table-name $usertable --select COUNT
+    run_ycsb_on_all_loaders 'run dynamodb -P workloads/workloada -threads 100 \
+            -p table=$usertable \
+            -p dynamodb.endpoint=$endpoint \
+            -p dynamodb.connectMax=200 \
+            -p dynamodb.consistentReads=${consistent-true} \
+            -p dynamodb.primaryKey=p \
+            -p dynamodb.primaryKeyType=HASH \
+            -p recordcount=$((nloaders*nrecords)) \
+            -p maxexecutiontime=$maxexecutiontime \
+            -p operationcount=0 \
+            -p readproportion=1 \
+            -p updateproportion=0 \
+            -p scanproportion=0 \
+            -p insertproportion=0 \
+            -p requestdistribution=${distribution-zipfian} \
             -s'
     ;;
 w|*)
@@ -279,11 +317,10 @@ w|*)
             -p scanproportion=0 \
             -p insertproportion=1 \
             -p maxexecutiontime=$maxexecutiontime \
-            -p operationcount=999999999 \
+            -p operationcount=0 \
             -p measurementtype=hdrhistogram \
             -p dynamodb.endpoint=$endpoint \
             -p dynamodb.connectMax=200 \
-            -p requestdistribution=uniform \
             -p dynamodb.primaryKey=p \
             -p dynamodb.primaryKeyType=HASH \
             -s'
