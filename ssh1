@@ -240,12 +240,14 @@ a)
             -p recordcount=$((nloaders*nrecords)) \
             -p core_workload_insertion_retry_limit=10 \
             -p core_workload_insertion_retry_interval=1 \
+            -p fieldcount=${fieldcount-10} \
+            -p fieldlength=${fieldlength-256} \
             -s'
     # Uncomment this "scan" to verify that the load phase wrote the
     # expected number of items.
-    $AWS_CMD dynamodb scan \
-        --endpoint-url $scylla_api \
-        --table-name $usertable --select COUNT
+    #$AWS_CMD dynamodb scan \
+    #    --endpoint-url $scylla_api \
+    #    --table-name $usertable --select COUNT
     run_ycsb_on_all_loaders 'run dynamodb -P workloads/workloada -threads 100 \
             -p table=$usertable \
             -p dynamodb.endpoint=$endpoint \
@@ -256,6 +258,9 @@ a)
             -p recordcount=$((nloaders*nrecords)) \
             -p maxexecutiontime=$maxexecutiontime \
             -p operationcount=0 \
+            -p requestdistribution=${distribution-zipfian} \
+            -p fieldcount=${fieldcount-10} \
+            -p fieldlength=${fieldlength-256} \
             -s'
     ;;
 r)
@@ -273,6 +278,8 @@ r)
             -p recordcount=$((nloaders*nrecords)) \
             -p core_workload_insertion_retry_limit=10 \
             -p core_workload_insertion_retry_interval=1 \
+            -p fieldcount=${fieldcount-10} \
+            -p fieldlength=${fieldlength-256} \
             -s'
     # Uncomment this "scan" to verify that the load phase wrote the
     # expected number of items.
@@ -294,6 +301,8 @@ r)
             -p scanproportion=0 \
             -p insertproportion=0 \
             -p requestdistribution=${distribution-zipfian} \
+            -p fieldcount=${fieldcount-10} \
+            -p fieldlength=${fieldlength-256} \
             -s'
     ;;
 w|*)
@@ -301,6 +310,7 @@ w|*)
     if ! test -z "$wcu"
     then
         # FIXME: need to divide by item size!
+        nloaders=$((${#loaders[@]}*${#nodes[@]}*$MULT))
         target="-target $((wcu/nloaders))"
     else
         target=
