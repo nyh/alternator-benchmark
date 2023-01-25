@@ -1,0 +1,4 @@
+#1 TB of data
+recordcount = 1000000000
+operationcount = 0
+requestdistribution=uniform

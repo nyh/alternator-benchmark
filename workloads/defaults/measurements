@@ -1,2 +1,3 @@
-measurementtype = hdrhistogram\+raw
+#measurementtype = hdrhistogram\+raw
+measurementtype = raw
 measurement.interval = both
