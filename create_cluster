@@ -62,3 +62,4 @@ else
 fi
 
 ( cd scylla-cluster-tests && docker/env/hydra.sh $RUNNER_OPTION run-pytest -b aws -c aws_cluster.yaml cluster_builder.py::ClusterBuilder::test_create_cluster )
+./disable_auto_snapshot.sh
